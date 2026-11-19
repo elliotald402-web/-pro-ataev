@@ -20,13 +20,14 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 function switchTab(tab) {
-    ['new', 'db', 'settings'].forEach(t => {
+    ['new', 'db', 'blacklist', 'settings'].forEach(t => {
         document.getElementById('view-' + t).classList.add('hidden');
         document.getElementById('tab-' + t).classList.remove('active');
     });
     document.getElementById('view-' + tab).classList.remove('hidden');
     document.getElementById('tab-' + tab).classList.add('active');
     if (tab === 'db') renderTable();
+    if (tab === 'blacklist') renderBlacklist();
 }
 
 function saveSettings() {
@@ -42,10 +43,34 @@ function saveSettings() {
     alert('Настройки сохранены!');
 }
 
+function checkBlacklistAndUpdate() {
+    const cName = document.getElementById('clientName').value;
+    const cPhone = document.getElementById('clientPhone').value;
+    const gName = document.getElementById('guarantorName').value;
+    const gPhone = document.getElementById('guarantorPhone').value;
+
+    const foundClient = findInBlacklist(cName, cPhone);
+    const foundGuarantor = findInBlacklist(gName, gPhone);
+    const alertBox = document.getElementById('blacklist-alert');
+
+    if (foundClient || foundGuarantor) {
+        const match = foundClient || foundGuarantor;
+        const role = foundClient ? 'ПОКУПАТЕЛЬ' : 'ПОРУЧИТЕЛЬ';
+        alertBox.innerHTML = `🚫 <b>ВНИМАНИЕ! ${role} В ЧЁРНОМ СПИСКЕ!</b><br>
+            <b>${match.name}</b> (${match.phone})<br>
+            Причина: <b>${match.reason || 'не указана'}</b> (внесён ${match.date})`;
+        alertBox.classList.remove('hidden');
+    } else {
+        alertBox.classList.add('hidden');
+    }
+    updateAll();
+}
+
 function recalcPrice() {
-    const base = parseFloat(document.getElementById('basePrice').value) || 0;
+    const baseRaw = document.getElementById('basePrice').value;
+    const base = parseFloat(baseRaw) || 0;
     const down = parseFloat(document.getElementById('downPayment').value) || 0;
-    const months = parseInt(document.getElementById('months').value) || 7;
+    const months = parseInt(document.getElementById('months').value) || 6;
     const hasDown = down > 0;
 
     let percent = 0;
@@ -66,8 +91,9 @@ function recalcPrice() {
     document.getElementById('markupPercent').value = percent;
     document.getElementById('tariffHint').innerText = label;
 
-    const total = Math.round(base + (base * percent / 100));
-    document.getElementById('totalPrice').value = total;
+    if (baseRaw !== '' && base > 0) {
+        document.getElementById('totalPrice').value = Math.round(base + (base * percent / 100));
+    }
     updateAll();
 }
 
@@ -75,7 +101,9 @@ function manualMarkupChange() {
     const base = parseFloat(document.getElementById('basePrice').value) || 0;
     const percent = parseFloat(document.getElementById('markupPercent').value) || 0;
     document.getElementById('tariffHint').innerText = 'Ручной %';
-    document.getElementById('totalPrice').value = Math.round(base + (base * percent / 100));
+    if (base > 0) {
+        document.getElementById('totalPrice').value = Math.round(base + (base * percent / 100));
+    }
     updateAll();
 }
 
@@ -113,7 +141,7 @@ function updateAll(customDeal = null) {
         imei: document.getElementById('imei').value.trim(),
         basePrice: parseFloat(document.getElementById('basePrice').value) || 0,
         downPayment: parseFloat(document.getElementById('downPayment').value) || 0,
-        months: parseInt(document.getElementById('months').value) || 7,
+        months: parseInt(document.getElementById('months').value) || 6,
         markupPercent: parseFloat(document.getElementById('markupPercent').value) || 0,
         totalPrice: parseFloat(document.getElementById('totalPrice').value) || 0,
         pledge: document.getElementById('pledgeStatus').value
@@ -123,29 +151,29 @@ function updateAll(customDeal = null) {
     const monthly = Math.ceil(remainder / d.months);
     const schedule = d.schedule || buildSchedule(d.months, monthly, d.dateIso);
     const formattedDate = d.dateIso.split('-').reverse().join('.');
+    const markupRub = d.basePrice > 0 ? Math.max(0, d.totalPrice - d.basePrice) : 0;
 
     if (!customDeal) {
         document.getElementById('calcSummary').innerHTML = `
-            <strong>Итоговая сумма:</strong> ${d.totalPrice.toLocaleString('ru-RU')} ₽ (наценка +${(d.totalPrice - d.basePrice).toLocaleString('ru-RU')} ₽)<br>
+            <strong>Итоговая сумма:</strong> ${d.totalPrice.toLocaleString('ru-RU')} ₽${markupRub > 0 ? ` (наценка +${markupRub.toLocaleString('ru-RU')} ₽)` : ''}<br>
             <strong>Остаток долга:</strong> ${remainder.toLocaleString('ru-RU')} ₽ | 
-            <strong>Платеж в месяц:</strong> ${monthly.toLocaleString('ru-RU')} ₽
+            <strong>Платеж в месяц (${d.months} мес.):</strong> ${monthly.toLocaleString('ru-RU')} ₽
         `;
     }
 
+    const half = Math.ceil(schedule.length / 2);
     let col1 = '';
     let col2 = '';
-    for (let i = 1; i <= 12; i++) {
-        const s = schedule.find(item => item.num === i);
-        let line = '';
-        if (s) {
-            const parts = s.ruDate.split('.');
-            line = `<div class="schedule-item">${i}-й платеж «<u>${parts[0]}</u>» <u>${parts[1]}</u> 20<u>${parts[2].slice(2)}</u> г. в размере <u><b>${s.amount.toLocaleString('ru-RU')}</b></u> рублей</div>`;
-        } else {
-            line = `<div class="schedule-item">${i}-й платеж «___» _____ 20___ г. в размере ___________ рублей</div>`;
-        }
-        if (i <= 6) col1 += line;
+
+    schedule.forEach((s, idx) => {
+        const parts = s.ruDate.split('.');
+        const day = parts[0];
+        const month = parts[1];
+        const year = parts[2];
+        const line = `<div class="schedule-item"><b>${s.num}-й платеж</b> «<u><b>${day}</b></u>» <u><b>${month}</b></u> <u><b>${year}</b></u> г. — ______________ руб.</div>`;
+        if (idx < half) col1 += line;
         else col2 += line;
-    }
+    });
 
     const productFull = d.phoneModel ? `${d.phoneModel}${d.imei ? ' (IMEI: ' + d.imei + ')' : ''}` : '';
     const clientContacts = [d.clientPhone, d.clientExtraPhone].filter(Boolean).join(', ');
@@ -189,7 +217,7 @@ function updateAll(customDeal = null) {
         <div class="doc-section-title">2. Цена договора и порядок расчетов</div>
         <div class="doc-p">2.1. Цена товара составляет ( <b>${d.totalPrice.toLocaleString('ru-RU')}</b> ) рублей.</div>
         <div class="doc-p">2.2. Предоплата составляет ( <b>${d.downPayment.toLocaleString('ru-RU')}</b> ) рублей.</div>
-        <div class="doc-p">2.3. Оплата товара производится равными частями помесячно согласно графику ниже:</div>
+        <div class="doc-p">2.3. Оплата товара производится равными частями помесячно (${d.months} мес.). <b>Ежемесячный платеж составляет: ${monthly.toLocaleString('ru-RU')} рублей.</b></div>
 
         <div class="schedule-grid">
             <div>${col1}</div>
@@ -234,11 +262,19 @@ function updateAll(customDeal = null) {
 }
 function saveDeal() {
     const name = document.getElementById('clientName').value.trim();
+    const phone = document.getElementById('clientPhone').value.trim();
     const model = document.getElementById('phoneModel').value.trim();
     if (!name || !model) {
         alert('Укажите ФИО Покупателя и наименование товара!');
         return;
     }
+
+    const inBL = findInBlacklist(name, phone);
+    if (inBL) {
+        const proceed = confirm(`⚠️ ВНИМАНИЕ! Этот человек (${inBL.name}) находится в ЧЁРНОМ СПИСКЕ!\nПричина: ${inBL.reason}\n\nВсё равно сохранить договор?`);
+        if (!proceed) return;
+    }
+
     const deal = updateAll();
     addDealToDB(deal);
     updateCount();
@@ -295,18 +331,81 @@ function renderTable() {
             <td>${statusHtml}</td>
             <td>
                 <button class="btn btn-primary btn-sm" onclick="loadDealToPrint(${dIdx})">📄 Бланк</button>
+                <button class="btn btn-warning btn-sm" onclick="sendClientToBlacklist(${dIdx})" title="Отправить в Чёрный список">🚫 В ЧС</button>
                 <button class="btn btn-danger btn-sm" onclick="deleteDeal(${dIdx})">🗑️</button>
             </td>
         </tr>`;
     }).join('');
 
-    const badge = document.getElementById('overdue-badge');
-    if (overdueClientsCount > 0) {
-        badge.innerText = `⚠️ Просрочек: ${overdueClientsCount}`;
-        badge.classList.remove('hidden');
-    } else {
-        badge.classList.add('hidden');
+    updateOverdueBadge(overdueClientsCount);
+}
+
+function addManualBlacklist() {
+    const name = document.getElementById('blName').value.trim();
+    const phone = document.getElementById('blPhone').value.trim();
+    const reason = document.getElementById('blReason').value.trim();
+
+    if (!name && !phone) {
+        alert('Укажите ФИО или номер телефона!');
+        return;
     }
+
+    addToBlacklistDB({
+        date: new Date().toLocaleDateString('ru-RU'),
+        name: name || 'Без имени',
+        phone: phone || '-',
+        reason: reason || 'Не указана'
+    });
+
+    document.getElementById('blName').value = '';
+    document.getElementById('blPhone').value = '';
+    document.getElementById('blReason').value = '';
+
+    updateCount();
+    renderBlacklist();
+    alert('Запись добавлена в Чёрный список!');
+}
+
+function sendClientToBlacklist(dealIdx) {
+    const d = deals[dealIdx];
+    const reason = prompt(`Укажите причину добавления ${d.clientName} в Чёрный список:`, 'Просрочка / невыплата по договору №' + d.id);
+    if (reason === null) return;
+
+    addToBlacklistDB({
+        date: new Date().toLocaleDateString('ru-RU'),
+        name: d.clientName,
+        phone: d.clientPhone,
+        reason: reason || 'Просрочка по договору №' + d.id
+    });
+
+    updateCount();
+    alert(`${d.clientName} добавлен в Чёрный список!`);
+}
+
+function removeBlacklistItem(idx) {
+    if (confirm('Убрать человека из Чёрного списка?')) {
+        deleteFromBlacklistDB(idx);
+        updateCount();
+        renderBlacklist();
+    }
+}
+
+function renderBlacklist() {
+    const query = (document.getElementById('blSearchInput').value || '').toLowerCase();
+    const tbody = document.getElementById('blTableBody');
+
+    tbody.innerHTML = blacklist.map((item, idx) => {
+        const searchStr = `${item.name} ${item.phone} ${item.reason}`.toLowerCase();
+        if (query && !searchStr.includes(query)) return '';
+
+        return `<tr class="row-overdue">
+            <td>${item.date}</td>
+            <td><strong>${item.name}</strong></td>
+            <td><strong>${item.phone}</strong></td>
+            <td>${item.reason}</td>
+            <td><button class="btn btn-secondary btn-sm" onclick="removeBlacklistItem(${idx})">✅ Убрать из ЧС</button></td>
+        </tr>`;
+    }).join('');
 }
 
 function openPayModal(dealIdx, payIdx) {
@@ -356,18 +455,23 @@ function deleteDeal(dealIdx) {
     }
 }
 
+function updateOverdueBadge(count) {
+    const badge = document.getElementById('overdue-badge');
+    if (count > 0) {
+        badge.innerText = `⚠️ Просрочек: ${count}`;
+        badge.classList.remove('hidden');
+    } else {
+        badge.classList.add('hidden');
+    }
+}
+
 function updateCount() {
     document.getElementById('deals-count').innerText = deals.length;
+    document.getElementById('bl-count').innerText = blacklist.length;
     let overdueCount = 0;
     deals.forEach(d => {
         const info = analyzeDeal(d);
         if (!info.isClosed && info.maxOverdueDays > 0) overdueCount++;
     });
-    const badge = document.getElementById('overdue-badge');
-    if (overdueCount > 0) {
-        badge.innerText = `⚠️ Просрочек: ${overdueCount}`;
-        badge.classList.remove('hidden');
-    } else {
-        badge.classList.add('hidden');
-    }
+    updateOverdueBadge(overdueCount);
 }

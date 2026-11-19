@@ -14,8 +14,9 @@
         <span id="overdue-badge" class="overdue-top-badge hidden">⚠️ Просрочек: 0</span>
     </div>
     <div class="tabs">
-        <button id="tab-new" class="active" onclick="switchTab('new')">➕ Новый договор</button>
-        <button id="tab-db" onclick="switchTab('db')">📂 База (<span id="deals-count">0</span>)</button>
+        <button id="tab-new" class="active" onclick="switchTab('new')">➕ Договор</button>
+        <button id="tab-db" onclick="switchTab('db')">📋 База (<span id="deals-count">0</span>)</button>
+        <button id="tab-blacklist" onclick="switchTab('blacklist')">🚫 ЧС (<span id="bl-count">0</span>)</button>
         <button id="tab-settings" onclick="switchTab('settings')">⚙️ Настройки</button>
     </div>
 </div>
@@ -24,14 +25,15 @@
     <div id="view-new" class="grid-2">
         <div class="card no-print">
             <h2>1. Данные клиента и поручителя</h2>
+            <div id="blacklist-alert" class="bl-warning-box hidden"></div>
             <div class="form-row">
                 <div class="form-group">
                     <label>ФИО Покупателя *</label>
-                    <input type="text" id="clientName" placeholder="Иванов Иван Иванович" oninput="updateAll()">
+                    <input type="text" id="clientName" placeholder="Иванов Иван Иванович" oninput="checkBlacklistAndUpdate()">
                 </div>
                 <div class="form-group">
                     <label>Телефон Покупателя *</label>
-                    <input type="text" id="clientPhone" placeholder="+7 (928) 000-00-00" oninput="updateAll()">
+                    <input type="text" id="clientPhone" placeholder="+7 (928) 000-00-00" oninput="checkBlacklistAndUpdate()">
                 </div>
             </div>
             <div class="form-row">
@@ -47,11 +49,11 @@
             <div class="form-row">
                 <div class="form-group">
                     <label>ФИО Поручителя (если есть)</label>
-                    <input type="text" id="guarantorName" placeholder="Петров Петр Петрович" oninput="updateAll()">
+                    <input type="text" id="guarantorName" placeholder="Петров Петр Петрович" oninput="checkBlacklistAndUpdate()">
                 </div>
                 <div class="form-group">
                     <label>Телефон Поручителя</label>
-                    <input type="text" id="guarantorPhone" placeholder="+7 (928) 333-44-55" oninput="updateAll()">
+                    <input type="text" id="guarantorPhone" placeholder="+7 (928) 333-44-55" oninput="checkBlacklistAndUpdate()">
                 </div>
             </div>
             <h2>2. Товар и Расчет рассрочки</h2>
@@ -79,8 +81,8 @@
                 <div class="form-group">
                     <label>Срок рассрочки</label>
                     <select id="months" onchange="recalcPrice()">
-                        <option value="6">6 месяцев</option>
-                        <option value="7" selected>7 месяцев</option>
+                        <option value="6" selected>6 месяцев</option>
+                        <option value="7">7 месяцев</option>
                         <option value="8">8 месяцев</option>
                         <option value="3">3 месяца</option>
                         <option value="4">4 месяца</option>
@@ -93,13 +95,13 @@
                 </div>
                 <div class="form-group">
                     <label>Процент наценки (%) <span id="tariffHint" class="tariff-badge"></span></label>
-                    <input type="number" id="markupPercent" value="32" oninput="manualMarkupChange()">
+                    <input type="number" id="markupPercent" value="29" oninput="manualMarkupChange()">
                 </div>
             </div>
             <div class="form-row">
                 <div class="form-group">
                     <label>Итоговая цена товара по договору (₽)</label>
-                    <input type="number" id="totalPrice" value="105600" oninput="updateAll()">
+                    <input type="number" id="totalPrice" value="103200" oninput="updateAll()">
                 </div>
                 <div class="form-group">
                     <label>Товар в залог по договору</label>
@@ -123,6 +125,7 @@
             <div id="contract-area" class="a4-sheet"></div>
         </div>
     </div>
+    <!-- ВКЛАДКА 2: БАЗА КЛИЕНТОВ -->
     <div id="view-db" class="card hidden no-print">
         <div class="db-header">
             <h2>База клиентов и контроль просрочек</h2>
@@ -134,7 +137,7 @@
                     <option value="done">🟢 Закрытые</option>
                 </select>
                 <input type="text" id="searchInput" placeholder="🔍 Поиск (ФИО, тел, IMEI)..." onkeyup="renderTable()">
-                <button class="btn btn-warning btn-sm" onclick="sendTelegramOverdueReport(true)">📲 Отправить должников в Telegram</button>
+                <button class="btn btn-warning btn-sm" onclick="sendTelegramOverdueReport(true)">📲 Должников в Telegram</button>
             </div>
         </div>
         <div class="table-wrapper">
@@ -155,6 +158,48 @@
         </div>
     </div>
 
+    <!-- ВКЛАДКА 3: ЧЕРНЫЙ СПИСОК -->
+    <div id="view-blacklist" class="card hidden no-print">
+        <h2>🚫 Чёрный список (Кому нельзя давать в рассрочку)</h2>
+        <div class="bl-add-box">
+            <div class="form-row">
+                <div class="form-group">
+                    <label>ФИО нарушителя *</label>
+                    <input type="text" id="blName" placeholder="Иванов Иван Иванович">
+                </div>
+                <div class="form-group">
+                    <label>Телефон *</label>
+                    <input type="text" id="blPhone" placeholder="+7 (928) 000-00-00">
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Причина / Комментарий (например: не платит 3 месяца, кинул и т.д.)</label>
+                <input type="text" id="blReason" placeholder="Причина внесения в ЧС...">
+            </div>
+            <button class="btn btn-danger" onclick="addManualBlacklist()">🚫 Добавить в чёрный список</button>
+        </div>
+
+        <div class="db-header mt-10">
+            <h2>Список заблокированных лиц</h2>
+            <input type="text" id="blSearchInput" placeholder="🔍 Поиск по ЧС..." onkeyup="renderBlacklist()">
+        </div>
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Дата внесения</th>
+                        <th>ФИО</th>
+                        <th>Телефон</th>
+                        <th>Причина</th>
+                        <th>Действия</th>
+                    </tr>
+                </thead>
+                <tbody id="blTableBody"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- ВКЛАДКА 4: НАСТРОЙКИ И TELEGRAM -->
     <div id="view-settings" class="card hidden settings-card no-print">
         <h2>Реквизиты компании Pro Ataev</h2>
         <div class="form-group">
@@ -176,7 +221,7 @@
 
         <hr class="divider">
         <h2>📲 Уведомления о просрочке в Telegram</h2>
-        <p class="hint">Создайте бота в Telegram через <b>@BotFather</b>, вставьте сюда Токен и ваш Chat ID (узнать можно через <b>@userinfobot</b>). Сайт сам пришлет уведомление, если кто-то просрочил платеж хотя бы на 1 день.</p>
+        <p class="hint">Создайте бота в Telegram через <b>@BotFather</b>, вставьте сюда Токен и ваш Chat ID (узнать можно через <b>@userinfobot</b>).</p>
         <div class="form-group">
             <label>Telegram Bot Token</label>
             <input type="text" id="tgToken" placeholder="1234567890:AAH...">
@@ -191,7 +236,7 @@
         </div>
 
         <hr class="divider">
-        <h2>Резервная копия базы</h2>
+        <h2>Резервная копия базы и ЧС</h2>
         <div class="form-row">
             <button class="btn btn-success" onclick="exportBackup()">⬇️ Скачать базу (JSON)</button>
             <button class="btn btn-primary" onclick="document.getElementById('importFile').click()">⬆️ Загрузить базу</button>
@@ -200,6 +245,7 @@
     </div>
 </div>
 
+<!-- МОДАЛЬНОЕ ОКНО ДЛЯ ОТМЕТКИ ОПЛАТЫ -->
 <div id="payModal" class="modal hidden no-print">
     <div class="modal-content">
         <h3>Отметка оплаты за <span id="modalMonthNum"></span>-й месяц</h3>
