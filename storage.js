@@ -1,6 +1,4 @@
-let deals = JSON.parse(localStorage.getItem('pro_ataev_deals') || '[]');
-let blacklist = JSON.parse(localStorage.getItem('pro_ataev_blacklist') || '[]');
-let settings = JSON.parse(localStorage.getItem('pro_ataev_settings') || JSON.stringify({
+const DEFAULT_SETTINGS = {
     company: "Pro Ataev",
     sellerFio: "Атаев Деналбек",
     phone: "+7 (929) 891-88-82 ДЕНАЛБЕК",
@@ -8,7 +6,27 @@ let settings = JSON.parse(localStorage.getItem('pro_ataev_settings') || JSON.str
     tgToken: "",
     tgChatId: "",
     lastAutoNotifyDate: ""
-}));
+};
+
+let deals = JSON.parse(localStorage.getItem('pro_ataev_deals') || '[]');
+let blacklist = JSON.parse(localStorage.getItem('pro_ataev_blacklist') || '[]');
+let settings = {
+    ...DEFAULT_SETTINGS,
+    ...JSON.parse(localStorage.getItem('pro_ataev_settings') || '{}')
+};
+
+function getLocalIsoDate(dateObj = new Date()) {
+    const yyyy = dateObj.getFullYear();
+    const mm = String(dateObj.getMonth() + 1).padStart(2, '0');
+    const dd = String(dateObj.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
+}
+
+function parseLocalIsoDate(isoStr) {
+    if (!isoStr) return new Date();
+    const parts = isoStr.split('-').map(Number);
+    return new Date(parts.at(0), (parts.at(1) || 1) - 1, parts.at(2) || 1, 0, 0, 0, 0);
+}
 
 function saveSettingsToDB(newSettings) {
     settings = { ...settings, ...newSettings };
@@ -21,10 +39,12 @@ function addDealToDB(deal) {
 }
 
 function updatePaymentInDB(dealIdx, payIdx, paidAmount, paidDate) {
-    const item = deals[dealIdx].schedule[payIdx];
-    item.paidAmount = paidAmount;
+    const deal = deals.at(dealIdx);
+    if (!deal || !deal.schedule.at(payIdx)) return;
+    const item = deal.schedule.at(payIdx);
+    item.paidAmount = Math.max(0, paidAmount);
     item.paidDate = paidDate;
-    item.paid = paidAmount >= item.amount;
+    item.paid = item.paidAmount >= item.amount;
     localStorage.setItem('pro_ataev_deals', JSON.stringify(deals));
 }
 
@@ -33,7 +53,6 @@ function deleteDealFromDB(dealIdx) {
     localStorage.setItem('pro_ataev_deals', JSON.stringify(deals));
 }
 
-// Работа с Чёрным списком
 function addToBlacklistDB(entry) {
     blacklist.unshift(entry);
     localStorage.setItem('pro_ataev_blacklist', JSON.stringify(blacklist));
@@ -47,7 +66,7 @@ function deleteFromBlacklistDB(idx) {
 function findInBlacklist(name, phone) {
     const cleanPhone = (phone || '').replace(/\D/g, '').slice(-10);
     const cleanName = (name || '').trim().toLowerCase();
-    if (!cleanPhone && cleanName.length < 4) return null;
+    if (cleanPhone.length < 7 && cleanName.length < 4) return null;
 
     return blacklist.find(item => {
         const itemPhone = (item.phone || '').replace(/\D/g, '').slice(-10);
@@ -58,11 +77,9 @@ function findInBlacklist(name, phone) {
     });
 }
 
-// Подсчет просрочки в днях
 function getDaysOverdue(dateIsoStr, isPaid) {
     if (isPaid || !dateIsoStr) return 0;
-    const due = new Date(dateIsoStr);
-    due.setHours(0, 0, 0, 0);
+    const due = parseLocalIsoDate(dateIsoStr);
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const diffMs = today - due;
@@ -70,62 +87,59 @@ function getDaysOverdue(dateIsoStr, isPaid) {
     return Math.floor(diffMs / (1000 * 60 * 60 * 24));
 }
 
-// Анализ сделки
 function analyzeDeal(deal) {
     let maxOverdueDays = 0;
     let overdueSum = 0;
-    let totalPaid = deal.downPayment || 0;
+    let schedulePaid = 0;
 
     deal.schedule.forEach(s => {
         const paidNow = s.paidAmount !== undefined ? s.paidAmount : (s.paid ? s.amount : 0);
-        totalPaid += paidNow;
+        schedulePaid += paidNow;
         const isFullyPaid = paidNow >= s.amount;
         const days = getDaysOverdue(s.isoDate, isFullyPaid);
         if (days > 0) {
             if (days > maxOverdueDays) maxOverdueDays = days;
-            overdueSum += (s.amount - paidNow);
+            overdueSum += Math.max(0, s.amount - paidNow);
         }
     });
 
-    const isClosed = deal.schedule.every(s => (s.paidAmount !== undefined ? s.paidAmount >= s.amount : s.paid));
-    const remainingDebt = Math.max(0, deal.totalPrice - totalPaid);
+    const totalPaid = (deal.downPayment || 0) + schedulePaid;
+    const isClosed = deal.schedule.every(s => {
+        const paidNow = s.paidAmount !== undefined ? s.paidAmount : (s.paid ? s.amount : 0);
+        return paidNow >= s.amount;
+    });
+    const remainingDebt = isClosed ? 0 : Math.max(0, deal.totalPrice - totalPaid);
 
-    return {
-        maxOverdueDays,
-        overdueSum,
-        totalPaid,
-        remainingDebt,
-        isClosed
-    };
+    return { maxOverdueDays, overdueSum, totalPaid, remainingDebt, isClosed };
 }
 
 function exportBackup() {
-    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify({ deals, blacklist, settings }));
+    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify({ deals, blacklist, settings }, null, 2));
     const a = document.createElement('a');
     a.href = dataStr;
-    a.download = "ProAtaev_Baza_" + new Date().toLocaleDateString('ru-RU') + ".json";
+    a.download = "ProAtaev_Baza_" + getLocalIsoDate() + ".json";
     document.body.appendChild(a);
     a.click();
     a.remove();
 }
 
 function importBackup(event) {
-    const file = event.target.files[0];
+    const file = event.target.files.item(0);
     if (!file) return;
     const reader = new FileReader();
     reader.onload = function(e) {
         try {
             const parsed = JSON.parse(e.target.result);
-            if (parsed.deals) {
+            if (Array.isArray(parsed.deals)) {
                 deals = parsed.deals;
                 localStorage.setItem('pro_ataev_deals', JSON.stringify(deals));
             }
-            if (parsed.blacklist) {
+            if (Array.isArray(parsed.blacklist)) {
                 blacklist = parsed.blacklist;
                 localStorage.setItem('pro_ataev_blacklist', JSON.stringify(blacklist));
             }
-            if (parsed.settings) {
-                settings = { ...settings, ...parsed.settings };
+            if (parsed.settings && typeof parsed.settings === 'object') {
+                settings = { ...DEFAULT_SETTINGS, ...parsed.settings };
                 localStorage.setItem('pro_ataev_settings', JSON.stringify(settings));
             }
             updateCount();
@@ -134,6 +148,8 @@ function importBackup(event) {
             alert('База и чёрный список успешно загружены!');
         } catch (err) {
             alert('Ошибка при чтении файла!');
+        } finally {
+            event.target.value = '';
         }
     };
     reader.readAsText(file);

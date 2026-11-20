@@ -1,19 +1,36 @@
 let activeModalDealIdx = null;
 let activeModalPayIdx = null;
+let currentPreviewId = generateDealId();
 
+function generateDealId() {
+    let id;
+    do {
+        id = Math.floor(1000 + Math.random() * 9000);
+    } while (deals.some(d => d.id === id) && deals.length < 8999);
+    return id;
+}
+
+function escapeHtml(str) {
+    return String(str ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+}
 document.addEventListener('DOMContentLoaded', () => {
-    document.getElementById('dealDate').valueAsDate = new Date();
-    document.getElementById('companyName').value = settings.company || 'Pro Ataev';
-    document.getElementById('sellerFio').value = settings.sellerFio || '';
-    document.getElementById('sellerPhone').value = settings.phone || '+7 (929) 891-88-82 ДЕНАЛБЕК';
-    document.getElementById('sellerCity').value = settings.city || 'г. Грозный';
-    document.getElementById('tgToken').value = settings.tgToken || '';
-    document.getElementById('tgChatId').value = settings.tgChatId || '';
+    document.getElementById('dealDate').value = getLocalIsoDate();
+    document.getElementById('companyName').value = settings.company;
+    document.getElementById('sellerFio').value = settings.sellerFio;
+    document.getElementById('sellerPhone').value = settings.phone;
+    document.getElementById('sellerCity').value = settings.city;
+    document.getElementById('tgToken').value = settings.tgToken;
+    document.getElementById('tgChatId').value = settings.tgChatId;
 
     recalcPrice();
     updateCount();
 
-    const todayStr = new Date().toISOString().slice(0, 10);
+    const todayStr = getLocalIsoDate();
     if (settings.lastAutoNotifyDate !== todayStr) {
         sendTelegramOverdueReport(false);
     }
@@ -29,18 +46,17 @@ function switchTab(tab) {
     if (tab === 'db') renderTable();
     if (tab === 'blacklist') renderBlacklist();
 }
-
-function saveSettings() {
+function saveSettings(silent = false) {
     saveSettingsToDB({
-        company: document.getElementById('companyName').value,
-        sellerFio: document.getElementById('sellerFio').value,
-        phone: document.getElementById('sellerPhone').value,
-        city: document.getElementById('sellerCity').value,
+        company: document.getElementById('companyName').value.trim() || DEFAULT_SETTINGS.company,
+        sellerFio: document.getElementById('sellerFio').value.trim(),
+        phone: document.getElementById('sellerPhone').value.trim(),
+        city: document.getElementById('sellerCity').value.trim(),
         tgToken: document.getElementById('tgToken').value.trim(),
         tgChatId: document.getElementById('tgChatId').value.trim()
     });
     updateAll();
-    alert('Настройки сохранены!');
+    if (!silent) alert('Настройки сохранены!');
 }
 
 function checkBlacklistAndUpdate() {
@@ -57,15 +73,14 @@ function checkBlacklistAndUpdate() {
         const match = foundClient || foundGuarantor;
         const role = foundClient ? 'ПОКУПАТЕЛЬ' : 'ПОРУЧИТЕЛЬ';
         alertBox.innerHTML = `🚫 <b>ВНИМАНИЕ! ${role} В ЧЁРНОМ СПИСКЕ!</b><br>
-            <b>${match.name}</b> (${match.phone})<br>
-            Причина: <b>${match.reason || 'не указана'}</b> (внесён ${match.date})`;
+            <b>${escapeHtml(match.name)}</b> (${escapeHtml(match.phone)})<br>
+            Причина: <b>${escapeHtml(match.reason || 'не указана')}</b> (внесён ${escapeHtml(match.date)})`;
         alertBox.classList.remove('hidden');
     } else {
         alertBox.classList.add('hidden');
     }
     updateAll();
 }
-
 function recalcPrice() {
     const baseRaw = document.getElementById('basePrice').value;
     const base = parseFloat(baseRaw) || 0;
@@ -106,21 +121,32 @@ function manualMarkupChange() {
     }
     updateAll();
 }
+function addMonthsSafe(baseDate, monthsToAdd) {
+    const year = baseDate.getFullYear();
+    const month = baseDate.getMonth() + monthsToAdd;
+    const day = baseDate.getDate();
+    const lastDayOfTargetMonth = new Date(year, month + 1, 0).getDate();
+    return new Date(year, month, Math.min(day, lastDayOfTargetMonth));
+}
 
-function buildSchedule(months, monthlyAmount, startDateIso) {
+function buildSchedule(months, remainder, startDateIso) {
     const list = [];
-    const base = startDateIso ? new Date(startDateIso) : new Date();
+    const base = startDateIso ? parseLocalIsoDate(startDateIso) : new Date();
+    const baseMonthly = Math.floor(remainder / months);
+    const diff = remainder - (baseMonthly * months);
+
     for (let i = 1; i <= months; i++) {
-        const d = new Date(base);
-        d.setMonth(d.getMonth() + i);
+        const d = addMonthsSafe(base, i);
         const yyyy = d.getFullYear();
         const mm = String(d.getMonth() + 1).padStart(2, '0');
         const dd = String(d.getDate()).padStart(2, '0');
+        const amount = baseMonthly + (i <= diff ? 1 : 0);
+
         list.push({
             num: i,
             isoDate: `${yyyy}-${mm}-${dd}`,
             ruDate: `${dd}.${mm}.${yyyy}`,
-            amount: monthlyAmount,
+            amount: amount,
             paidAmount: 0,
             paidDate: '',
             paid: false
@@ -130,8 +156,8 @@ function buildSchedule(months, monthlyAmount, startDateIso) {
 }
 function updateAll(customDeal = null) {
     const d = customDeal || {
-        id: Math.floor(1000 + Math.random() * 9000),
-        dateIso: document.getElementById('dealDate').value || new Date().toISOString().slice(0, 10),
+        id: currentPreviewId,
+        dateIso: document.getElementById('dealDate').value || getLocalIsoDate(),
         clientName: document.getElementById('clientName').value.trim(),
         clientPhone: document.getElementById('clientPhone').value.trim(),
         clientExtraPhone: document.getElementById('clientExtraPhone').value.trim(),
@@ -141,15 +167,16 @@ function updateAll(customDeal = null) {
         imei: document.getElementById('imei').value.trim(),
         basePrice: parseFloat(document.getElementById('basePrice').value) || 0,
         downPayment: parseFloat(document.getElementById('downPayment').value) || 0,
-        months: parseInt(document.getElementById('months').value) || 6,
+        months: Math.max(1, parseInt(document.getElementById('months').value) || 6),
         markupPercent: parseFloat(document.getElementById('markupPercent').value) || 0,
         totalPrice: parseFloat(document.getElementById('totalPrice').value) || 0,
         pledge: document.getElementById('pledgeStatus').value
     };
 
     const remainder = Math.max(0, d.totalPrice - d.downPayment);
-    const monthly = Math.ceil(remainder / d.months);
-    const schedule = d.schedule || buildSchedule(d.months, monthly, d.dateIso);
+    const schedule = d.schedule || buildSchedule(d.months, remainder, d.dateIso);
+    const firstPay = schedule.at(0);
+    const monthly = firstPay ? firstPay.amount : 0;
     const formattedDate = d.dateIso.split('-').reverse().join('.');
     const markupRub = d.basePrice > 0 ? Math.max(0, d.totalPrice - d.basePrice) : 0;
 
@@ -167,26 +194,25 @@ function updateAll(customDeal = null) {
 
     schedule.forEach((s, idx) => {
         const parts = s.ruDate.split('.');
-        const day = parts[0];
-        const month = parts[1];
-        const year = parts[2];
-        const line = `<div class="schedule-item"><b>${s.num}-й платеж</b> «<u><b>${day}</b></u>» <u><b>${month}</b></u> <u><b>${year}</b></u> г. — ______________ руб.</div>`;
+        const day = parts.at(0);
+        const month = parts.at(1);
+        const year = parts.at(2);
+        const line = `<div class="schedule-item"><b>${s.num}-й платеж</b> «<u><b>${day}</b></u>» <u><b>${month}</b></u> <u><b>${year}</b></u> г. — <b>${s.amount.toLocaleString('ru-RU')}</b> руб.</div>`;
         if (idx < half) col1 += line;
         else col2 += line;
     });
-
     const productFull = d.phoneModel ? `${d.phoneModel}${d.imei ? ' (IMEI: ' + d.imei + ')' : ''}` : '';
     const clientContacts = [d.clientPhone, d.clientExtraPhone].filter(Boolean).join(', ');
 
     document.getElementById('contract-area').innerHTML = `
-        <div class="doc-header-brand">${settings.company}</div>
-        <div class="doc-title">Договор купли-продажи № <u>${d.id}</u></div>
+        <div class="doc-header-brand">${escapeHtml(settings.company)}</div>
+        <div class="doc-title">Договор купли-продажи № <u>${escapeHtml(d.id)}</u></div>
         <div class="doc-city-date">
-            <div>${settings.city}</div>
-            <div>Дата: <u>${formattedDate} г.</u></div>
+            <div>${escapeHtml(settings.city)}</div>
+            <div>Дата: <u>${escapeHtml(formattedDate)} г.</u></div>
         </div>
-        <div class="doc-line-row">ФИО <span class="doc-underline">${settings.sellerFio || ''}</span> («Продавец»)</div>
-        <div class="doc-line-row">ФИО <span class="doc-underline">${d.clientName || ''}</span> («Покупатель»)</div>
+        <div class="doc-line-row">ФИО <span class="doc-underline">${escapeHtml(settings.sellerFio)}</span> («Продавец»)</div>
+        <div class="doc-line-row">ФИО <span class="doc-underline">${escapeHtml(d.clientName)}</span> («Покупатель»)</div>
 
         <div class="doc-section-title">1. Предмет договора</div>
         <div class="doc-p">1.1. Продавец передает в собственность Покупателя Товар, указанный в настоящем пункте:</div>
@@ -203,14 +229,13 @@ function updateAll(customDeal = null) {
             <tbody>
                 <tr>
                     <td>1.</td>
-                    <td class="left"><b>${productFull || '&nbsp;'}</b></td>
+                    <td class="left"><b>${productFull ? escapeHtml(productFull) : '&nbsp;'}</b></td>
                     <td>${productFull ? '1' : ''}</td>
                     <td>${d.totalPrice ? d.totalPrice.toLocaleString('ru-RU') : ''}</td>
                     <td><b>${d.totalPrice ? d.totalPrice.toLocaleString('ru-RU') : ''}</b></td>
                 </tr>
             </tbody>
         </table>
-
         <div class="doc-p">1.2. Право собственности на Товар переходит от Продавца к Покупателю с момента подписания данного договора. Все риски Товара переходят к Покупателю с момента передачи Товара Покупателю.</div>
         <div class="doc-p">1.3. Подписанием Договора и получением Товара во владение Покупатель подтверждает, что Товар полностью отвечает требованиям и ожиданиям Покупателя; Покупатель не вправе предъявлять претензии и требования к Продавцу, касающиеся качества Товара в связи с непричастностью Продавца к недостаткам Товара; все подобные требования должны быть адресованы Покупателем к первоначальному поставщику и (или) производителю при содействии Продавца.</div>
 
@@ -225,7 +250,7 @@ function updateAll(customDeal = null) {
         </div>
 
         <div class="doc-section-title">3. Обеспечение обязательств и связь сторон</div>
-        <div class="doc-p">Покупатель предоставляет Товар в залог для обеспечения своих обязательств по Договору: <b>(${d.pledge})</b>.</div>
+        <div class="doc-p">Покупатель предоставляет Товар в залог для обеспечения своих обязательств по Договору: <b>(${escapeHtml(d.pledge)})</b>.</div>
         <div class="doc-p">3.1. За выполнение Покупателем своих обязательств по Договору Поручителем выступает гражданин, подписавшийся ниже в графе: Поручитель.</div>
         <div class="doc-p">3.2. При подписании Договора на Поручителя возникают те же обязательства перед Продавцом, которые возникли на Покупателе. При первом требовании Продавца Поручитель обязуется выплатить оставшуюся задолженность Покупателя по Договору.</div>
         <div class="doc-p">3.3. <b>Договорённость по средствам связи:</b> Стороны признают юридическую силу уведомлений, звонков и сообщений (включая мессенджеры WhatsApp и Telegram), направленных по номерам телефонов, указанным в настоящем Договоре. Покупатель и Поручитель обязуются оставаться на связи и уведомлять Продавца о смене номера телефона в течение 24 часов.</div>
@@ -236,26 +261,26 @@ function updateAll(customDeal = null) {
         <div class="doc-section-title">5. Адреса, реквизиты и подписи сторон</div>
         <div class="requisites-grid">
             <div class="req-box">
-                <div class="req-box-title">Продавец (${settings.company})</div>
-                <div class="req-row">Тел: <b>${settings.phone}</b></div>
-                <div class="req-row">ФИО: <b>${settings.sellerFio}</b></div>
+                <div class="req-box-title">Продавец (${escapeHtml(settings.company)})</div>
+                <div class="req-row">Тел: <b>${escapeHtml(settings.phone)}</b></div>
+                <div class="req-row">ФИО: <b>${escapeHtml(settings.sellerFio)}</b></div>
                 <div class="req-row" style="margin-top:10px;">Подпись: _______________ / &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; /</div>
             </div>
             <div class="req-box">
                 <div class="req-box-title">Покупатель</div>
-                <div class="req-row">Тел: <b>${clientContacts || '____________________'}</b></div>
-                <div class="req-row">ФИО: <b>${d.clientName || '____________________'}</b></div>
+                <div class="req-row">Тел: <b>${clientContacts ? escapeHtml(clientContacts) : '____________________'}</b></div>
+                <div class="req-row">ФИО: <b>${d.clientName ? escapeHtml(d.clientName) : '____________________'}</b></div>
                 <div class="req-row" style="margin-top:10px;">Подпись: _______________ / &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; /</div>
             </div>
         </div>
         <div class="requisites-grid" style="grid-template-columns: 1fr;">
             <div class="req-box">
                 <div class="req-box-title">Поручитель</div>
-                <div class="req-row">Тел: <b>${d.guarantorPhone || '____________________'}</b> &nbsp;&nbsp;&nbsp; ФИО: <b>${d.guarantorName || '____________________________'}</b> &nbsp;&nbsp;&nbsp; Подпись: _____________ / &nbsp;&nbsp;&nbsp;&nbsp;&nbsp; /</div>
+                <div class="req-row">Тел: <b>${d.guarantorPhone ? escapeHtml(d.guarantorPhone) : '____________________'}</b> &nbsp;&nbsp;&nbsp; ФИО: <b>${d.guarantorName ? escapeHtml(d.guarantorName) : '____________________________'}</b> &nbsp;&nbsp;&nbsp; Подпись: _____________ / &nbsp;&nbsp;&nbsp;&nbsp;&nbsp; /</div>
             </div>
         </div>
 
-        <div class="doc-footer-pay">ДЛЯ ОПЛАТЫ СВЯЗАТЬСЯ ПО НОМЕРУ ${settings.phone}</div>
+        <div class="doc-footer-pay">ДЛЯ ОПЛАТЫ СВЯЗАТЬСЯ ПО НОМЕРУ ${escapeHtml(settings.phone)}</div>
     `;
 
     return { ...d, remainder, monthly, schedule };
@@ -279,6 +304,9 @@ function saveDeal() {
     addDealToDB(deal);
     updateCount();
     alert(`Договор №${deal.id} (${name}) сохранен в базу!`);
+
+    currentPreviewId = generateDealId();
+    updateAll();
 }
 
 function renderTable() {
@@ -311,7 +339,7 @@ function renderTable() {
             else if (lateDays > 0) cls += ' late';
 
             return `<span class="${cls}" onclick="openPayModal(${dIdx}, ${pIdx})" title="Нажмите, чтобы отметить оплату">
-                ${s.num} мес (${s.ruDate.slice(0, 5)}): ${paidNow > 0 ? paidNow.toLocaleString() + '/' : ''}${s.amount.toLocaleString()}₽
+                ${s.num} мес (${s.ruDate.slice(0, 5)}): ${paidNow > 0 ? paidNow.toLocaleString('ru-RU') + '/' : ''}${s.amount.toLocaleString('ru-RU')}₽
             </span>`;
         }).join('');
 
@@ -319,14 +347,14 @@ function renderTable() {
         if (info.isClosed) {
             statusHtml = `<span class="badge badge-done">Закрыт</span>`;
         } else if (info.maxOverdueDays > 0) {
-            statusHtml = `<span class="badge badge-overdue">⚠️ Просрочка: ${info.maxOverdueDays} дн.</span><br><small style="color:#dc2626;font-weight:bold;">Долг: ${info.overdueSum.toLocaleString()} ₽</small>`;
+            statusHtml = `<span class="badge badge-overdue">⚠️ Просрочка: ${info.maxOverdueDays} дн.</span><br><small style="color:#dc2626;font-weight:bold;">Долг: ${info.overdueSum.toLocaleString('ru-RU')} ₽</small>`;
         }
 
         return `<tr class="${(!info.isClosed && info.maxOverdueDays > 0) ? 'row-overdue' : ''}">
-            <td><strong>№${d.id}</strong><br><small>${d.dateIso.split('-').reverse().join('.')}</small></td>
-            <td><strong>${d.clientName}</strong><br><small>${d.clientPhone}</small>${d.guarantorName ? `<br><small>Поруч: ${d.guarantorName}</small>` : ''}</td>
-            <td>${d.phoneModel}<br><small>IMEI: ${d.imei || '-'}</small></td>
-            <td>Цена: ${d.totalPrice.toLocaleString()} ₽<br>Взнос: ${d.downPayment.toLocaleString()} ₽<br><strong>Остаток: ${info.remainingDebt.toLocaleString()} ₽</strong></td>
+            <td><strong>№${escapeHtml(d.id)}</strong><br><small>${escapeHtml(d.dateIso.split('-').reverse().join('.'))}</small></td>
+            <td><strong>${escapeHtml(d.clientName)}</strong><br><small>${escapeHtml(d.clientPhone)}</small>${d.guarantorName ? `<br><small>Поруч: ${escapeHtml(d.guarantorName)}</small>` : ''}</td>
+            <td>${escapeHtml(d.phoneModel)}<br><small>IMEI: ${escapeHtml(d.imei || '-')}</small></td>
+            <td>Цена: ${d.totalPrice.toLocaleString('ru-RU')} ₽<br>Взнос: ${d.downPayment.toLocaleString('ru-RU')} ₽<br><strong>Остаток: ${info.remainingDebt.toLocaleString('ru-RU')} ₽</strong></td>
             <td>${pills}</td>
             <td>${statusHtml}</td>
             <td>
@@ -339,7 +367,6 @@ function renderTable() {
 
     updateOverdueBadge(overdueClientsCount);
 }
-
 function addManualBlacklist() {
     const name = document.getElementById('blName').value.trim();
     const phone = document.getElementById('blPhone').value.trim();
@@ -367,7 +394,8 @@ function addManualBlacklist() {
 }
 
 function sendClientToBlacklist(dealIdx) {
-    const d = deals[dealIdx];
+    const d = deals.at(dealIdx);
+    if (!d) return;
     const reason = prompt(`Укажите причину добавления ${d.clientName} в Чёрный список:`, 'Просрочка / невыплата по договору №' + d.id);
     if (reason === null) return;
 
@@ -399,27 +427,28 @@ function renderBlacklist() {
         if (query && !searchStr.includes(query)) return '';
 
         return `<tr class="row-overdue">
-            <td>${item.date}</td>
-            <td><strong>${item.name}</strong></td>
-            <td><strong>${item.phone}</strong></td>
-            <td>${item.reason}</td>
+            <td>${escapeHtml(item.date)}</td>
+            <td><strong>${escapeHtml(item.name)}</strong></td>
+            <td><strong>${escapeHtml(item.phone)}</strong></td>
+            <td>${escapeHtml(item.reason)}</td>
             <td><button class="btn btn-secondary btn-sm" onclick="removeBlacklistItem(${idx})">✅ Убрать из ЧС</button></td>
         </tr>`;
     }).join('');
 }
-
 function openPayModal(dealIdx, payIdx) {
     activeModalDealIdx = dealIdx;
     activeModalPayIdx = payIdx;
-    const deal = deals[dealIdx];
-    const item = deal.schedule[payIdx];
+    const deal = deals.at(dealIdx);
+    if (!deal) return;
+    const item = deal.schedule.at(payIdx);
+    if (!item) return;
     const paidNow = item.paidAmount !== undefined ? item.paidAmount : (item.paid ? item.amount : 0);
 
     document.getElementById('modalMonthNum').innerText = item.num;
     document.getElementById('modalClientInfo').innerText = `${deal.clientName} • Договор №${deal.id} • Дата по графику: ${item.ruDate}`;
     document.getElementById('modalPlanAmount').innerText = item.amount.toLocaleString('ru-RU');
     document.getElementById('modalPaidInput').value = paidNow > 0 ? paidNow : item.amount;
-    document.getElementById('modalPaidDate').value = item.paidDate || new Date().toISOString().slice(0, 10);
+    document.getElementById('modalPaidDate').value = item.paidDate || getLocalIsoDate();
 
     document.getElementById('payModal').classList.remove('hidden');
 }
@@ -434,17 +463,21 @@ function confirmPayment() {
     updatePaymentInDB(activeModalDealIdx, activeModalPayIdx, amount, date);
     closePayModal();
     renderTable();
+    updateCount();
 }
 
 function resetPayment() {
     updatePaymentInDB(activeModalDealIdx, activeModalPayIdx, 0, '');
     closePayModal();
     renderTable();
+    updateCount();
 }
 
 function loadDealToPrint(dealIdx) {
+    const deal = deals.at(dealIdx);
+    if (!deal) return;
     switchTab('new');
-    updateAll(deals[dealIdx]);
+    updateAll(deal);
 }
 
 function deleteDeal(dealIdx) {
